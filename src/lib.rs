@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
+use applesauce::compressor::Kind;
 use applesauce::progress::{Progress, Task};
 use applesauce::FileCompressor;
-use applesauce_core::compressor::Kind;
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};

@@ -7,7 +7,6 @@ license = "GPL-3.0-or-later"
 [dependencies]
 anyhow = "1.0.101"
 applesauce = "0.8.4"
-applesauce-core = "0.4.9"
 clap = { version = "4.5.59", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
