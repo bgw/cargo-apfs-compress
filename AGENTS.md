@@ -1,0 +1,120 @@
+# AGENTS.md
+
+This file preserves the key implementation intent for `cargo-apfs-compress` so future contributors do not need `plan.md`.
+
+## Project Purpose
+
+`cargo-apfs-compress` is a CLI that discovers Cargo artifact directories and compresses files in those directories using APFS compression.
+
+Core behavior goals:
+
+- Use crates from crates.io (`applesauce-core`, `clap`, plus supporting crates).
+- Discover target output directories automatically via Cargo metadata.
+- Accept profile names and optional `--target` triples; map profiles the same way Cargo does.
+- Respect `CARGO` env var when selecting the Cargo executable.
+- Use Cargo's file lock mechanism (`cargo::util::flock`) with `.cargo-lock` in each work dir.
+- Compress while the lock is held, excluding `.cargo-lock` itself.
+- Default compression kind to LZFSE unless overridden.
+- Process all resolved directories in parallel.
+- Return non-zero if any directory fails.
+
+## CLI Contract
+
+- `--profile <name>` (repeatable), default is `dev` if omitted.
+- `--target <triple>` (repeatable, optional).
+- `--compression <lzfse|zlib|lzvn>`, default `lzfse`.
+- No positional target path arguments.
+
+## Design Decisions (Locked In)
+
+### Cargo executable resolution
+
+Use:
+
+1. `CARGO` env var if set and non-empty.
+2. Otherwise `cargo`.
+
+This path is used for metadata discovery (`cargo metadata --no-deps --format-version 1`).
+
+### Target directory discovery
+
+Parse `target_directory` from metadata JSON and treat it as the root artifact directory.
+
+### Profile -> directory mapping
+
+Baseline mapping:
+
+- `dev` -> `debug`
+- `test` -> `debug`
+- `bench` -> `release`
+- `release` -> `release`
+- custom profiles map to themselves
+
+Then apply `profile.<name>.dir-name` override from Cargo config when present.
+
+### Work directory resolution
+
+For each selected profile:
+
+- without targets: `<target_directory>/<profile_dir>`
+- with targets: `<target_directory>/<target>/<profile_dir>` for each target
+
+De-duplicate and sort directories before dispatching workers.
+
+### Locking model
+
+For each resolved directory:
+
+1. Missing directory is skipped with an info message (not fatal).
+2. Acquire exclusive lock on `<dir>/.cargo-lock` using `cargo::util::flock::Filesystem::open_rw_exclusive_create`.
+3. Compress recursively while lock is held.
+4. Exclude `.cargo-lock` from compression input.
+5. Release lock by dropping lock handle.
+
+### Parallelism and failure behavior
+
+- Unit of parallelism: one worker per resolved directory.
+- Process all directories even if some fail.
+- Print per-directory result.
+- Exit code is `0` only if all directories succeed.
+
+## Architecture Notes
+
+The implementation is intentionally split into testable units:
+
+- `resolve_cargo_exe`
+- `run_cargo_metadata`
+- `load_profile_dir_name_overrides`
+- `resolve_profile_dir_name`
+- `resolve_work_dirs`
+- `process_work_dir`
+
+A small compressor abstraction exists so tests can assert behavior without relying on APFS internals.
+
+## Testing Strategy
+
+Use `tempfile::tempdir()` heavily.
+
+Coverage includes:
+
+- profile mapping defaults
+- config override handling
+- directory resolution with and without targets
+- de-dup behavior
+- default compression argument
+- `.cargo-lock` exclusion
+- lock contention behavior
+- distinct-directory parallel behavior
+- aggregate error return behavior
+- command-level e2e via `Command::new(env!("CARGO_BIN_EXE_cargo-apfs-compress"))`
+
+## Known Trade-offs
+
+- Depending on the `cargo` crate internals is heavyweight and may be brittle over time.
+- If this becomes a maintenance issue, a fallback is to vendor/adapt only lock behavior required for `.cargo-lock` semantics.
+
+## Explicit Non-goals
+
+- No user-provided target directory paths.
+- No custom lock mechanism (use Cargo flock behavior first).
+- No attempt to fully replicate all Cargo profile/config semantics beyond `profile.<name>.dir-name` override support.
