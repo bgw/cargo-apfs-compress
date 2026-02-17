@@ -17,6 +17,16 @@ Use this over running [applesauce] directly on `target/` when you want Cargo-com
 cargo install cargo-apfs-compress
 ```
 
+## Use
+
+From a Cargo project directory, run:
+
+```bash
+cargo apfs-compress
+```
+
+You can pass optional flags like `--profile`, `--target`, and `--compression`.
+
 This project is macOS-only. On Linux, consider filesystem-native compression via Btrfs: https://btrfs.readthedocs.io/en/latest/Compression.html
 
 License note: this project is GPLv3+ because it depends on [applesauce], which is GPL-3.0-or-later.

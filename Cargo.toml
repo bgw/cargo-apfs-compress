@@ -1,6 +1,6 @@
 [package]
 name = "cargo-apfs-compress"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Compress Cargo target artifacts with APFS compression on macOS"
 license = "GPL-3.0-or-later"
