@@ -8,7 +8,7 @@ This file preserves the key implementation intent for `cargo-apfs-compress` so f
 
 Core behavior goals:
 
-- Use crates from crates.io (`applesauce-core`, `clap`, plus supporting crates).
+- Use crates from crates.io (`applesauce`, `clap`, plus supporting crates).
 - Discover target output directories automatically via Cargo metadata.
 - Accept profile names and optional `--target` triples; map profiles the same way Cargo does.
 - Respect `CARGO` env var when selecting the Cargo executable.
@@ -25,6 +25,7 @@ Core behavior goals:
 - `--compression <lzfse|zlib|lzvn>`, default `lzfse`.
 - No positional target path arguments.
 - If `--profile` is omitted, discover and process all build-root subdirectories under Cargo `target/`.
+- Support Cargo subcommand execution (`cargo apfs-compress ...`) and direct binary execution.
 
 ## Design Decisions (Locked In)
 
@@ -95,9 +96,15 @@ The implementation is intentionally split into testable units:
 - `load_profile_dir_name_overrides`
 - `resolve_profile_dir_name`
 - `resolve_work_dirs`
+- `discover_default_work_dirs`
 - `process_work_dir`
 
 A small compressor abstraction exists so tests can assert behavior without relying on APFS internals.
+
+## Licensing Notes
+
+- Project license is GPL-3.0-or-later.
+- `src/flock.rs` is derived from Cargo and is intentionally dual-licensed `MIT OR Apache-2.0` with a file-level header.
 
 ## Testing Strategy
 
