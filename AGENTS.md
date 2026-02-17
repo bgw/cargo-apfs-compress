@@ -12,7 +12,7 @@ Core behavior goals:
 - Discover target output directories automatically via Cargo metadata.
 - Accept profile names and optional `--target` triples; map profiles the same way Cargo does.
 - Respect `CARGO` env var when selecting the Cargo executable.
-- Use Cargo's file lock mechanism (`cargo::util::flock`) with `.cargo-lock` in each work dir.
+- Use a vendored/adapted lock implementation derived from Cargo's `flock.rs` with `.cargo-lock` in each work dir.
 - Compress while the lock is held, excluding `.cargo-lock` itself.
 - Default compression kind to LZFSE unless overridden.
 - Process all resolved directories in parallel.
@@ -74,7 +74,7 @@ In all cases, de-duplicate and sort directories before dispatching workers.
 For each resolved directory:
 
 1. Missing directory is skipped with an info message (not fatal).
-2. Acquire exclusive lock on `<dir>/.cargo-lock` using `cargo::util::flock::Filesystem::open_rw_exclusive_create`.
+2. Acquire exclusive lock on `<dir>/.cargo-lock` using `flock::Filesystem::open_rw_exclusive_create`.
 3. Compress recursively while lock is held.
 4. Exclude `.cargo-lock` from compression input.
 5. Release lock by dropping lock handle.
@@ -118,11 +118,10 @@ Coverage includes:
 
 ## Known Trade-offs
 
-- Depending on the `cargo` crate internals is heavyweight and may be brittle over time.
-- If this becomes a maintenance issue, a fallback is to vendor/adapt only lock behavior required for `.cargo-lock` semantics.
+- The vendored lock implementation must be kept in sync with upstream Cargo behavior as needed.
 
 ## Explicit Non-goals
 
 - No user-provided target directory paths.
-- No custom lock mechanism (use Cargo flock behavior first).
+- Do not reimplement lock behavior from scratch; keep using the vendored/adapted Cargo-derived flock implementation.
 - No attempt to fully replicate all Cargo profile/config semantics beyond `profile.<name>.dir-name` override support.

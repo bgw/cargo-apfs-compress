@@ -2,8 +2,6 @@ use anyhow::{anyhow, Context, Result};
 use applesauce::progress::{Progress, Task};
 use applesauce::FileCompressor;
 use applesauce_core::compressor::Kind;
-use cargo::util::flock::Filesystem;
-use cargo::util::GlobalContext;
 use clap::{Parser, ValueEnum};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
@@ -11,7 +9,10 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+
+mod flock;
+
+use crate::flock::Filesystem;
 
 const CARGO_LOCK_NAME: &str = ".cargo-lock";
 
@@ -264,12 +265,7 @@ impl Compressor for ApplesauceCompressor {
     }
 }
 
-pub fn process_work_dir(
-    dir: &Path,
-    compression: Kind,
-    gctx: &GlobalContext,
-    compressor: &dyn Compressor,
-) -> Result<()> {
+pub fn process_work_dir(dir: &Path, compression: Kind, compressor: &dyn Compressor) -> Result<()> {
     if !dir.exists() {
         println!("skip {} (missing)", dir.display());
         return Ok(());
@@ -280,7 +276,7 @@ pub fn process_work_dir(
 
     let fs = Filesystem::new(dir.to_path_buf());
     let _lock = fs
-        .open_rw_exclusive_create(CARGO_LOCK_NAME, gctx, "build directory")
+        .open_rw_exclusive_create(CARGO_LOCK_NAME, "build directory")
         .with_context(|| format!("failed to lock {}", dir.display()))?;
 
     let mut inputs = Vec::new();
@@ -313,15 +309,13 @@ pub fn run_with_compressor(cli: Cli, compressor: &dyn Compressor) -> Result<()> 
         resolve_work_dirs(&target_dir, &cli.profiles, &cli.targets, &overrides)
     };
 
-    let gctx = Arc::new(GlobalContext::default().context("failed to initialize Cargo context")?);
     let mut had_error = false;
 
     std::thread::scope(|scope| {
         let mut handles = Vec::new();
         for dir in dirs {
-            let gctx = Arc::clone(&gctx);
             handles.push(scope.spawn(move || {
-                let result = process_work_dir(&dir, cli.compression.to_kind(), &gctx, compressor);
+                let result = process_work_dir(&dir, cli.compression.to_kind(), compressor);
                 (dir, result)
             }));
         }
@@ -348,7 +342,7 @@ pub fn run_with_compressor(cli: Cli, compressor: &dyn Compressor) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
@@ -506,9 +500,8 @@ mod tests {
         fs::write(temp.path().join("artifact.bin"), b"abc").unwrap();
         fs::write(temp.path().join(CARGO_LOCK_NAME), b"").unwrap();
 
-        let gctx = GlobalContext::default().unwrap();
         let compressor = RecordingCompressor::default();
-        process_work_dir(temp.path(), Kind::Lzfse, &gctx, &compressor).unwrap();
+        process_work_dir(temp.path(), Kind::Lzfse, &compressor).unwrap();
 
         let calls = compressor.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
@@ -521,7 +514,6 @@ mod tests {
         let temp = tempdir().unwrap();
         fs::write(temp.path().join("artifact.bin"), b"abc").unwrap();
 
-        let gctx = Arc::new(GlobalContext::default().unwrap());
         let compressor = Arc::new(RecordingCompressor {
             delay: Duration::from_millis(200),
             ..RecordingCompressor::default()
@@ -531,12 +523,9 @@ mod tests {
         let d2 = temp.path().to_path_buf();
         let c1 = Arc::clone(&compressor);
         let c2 = Arc::clone(&compressor);
-        let g1 = Arc::clone(&gctx);
-        let g2 = Arc::clone(&gctx);
-
-        let t1 = thread::spawn(move || process_work_dir(&d1, Kind::Lzfse, &g1, &*c1));
+        let t1 = thread::spawn(move || process_work_dir(&d1, Kind::Lzfse, &*c1));
         thread::sleep(Duration::from_millis(20));
-        let t2 = thread::spawn(move || process_work_dir(&d2, Kind::Lzfse, &g2, &*c2));
+        let t2 = thread::spawn(move || process_work_dir(&d2, Kind::Lzfse, &*c2));
         t1.join().unwrap().unwrap();
         t2.join().unwrap().unwrap();
 
@@ -557,7 +546,6 @@ mod tests {
         fs::write(d1.join("a.bin"), b"a").unwrap();
         fs::write(d2.join("b.bin"), b"b").unwrap();
 
-        let gctx = Arc::new(GlobalContext::default().unwrap());
         let compressor = Arc::new(RecordingCompressor {
             delay: Duration::from_millis(200),
             ..RecordingCompressor::default()
@@ -565,13 +553,11 @@ mod tests {
 
         let c1 = Arc::clone(&compressor);
         let c2 = Arc::clone(&compressor);
-        let g1 = Arc::clone(&gctx);
-        let g2 = Arc::clone(&gctx);
         let d1c = d1.clone();
         let d2c = d2.clone();
 
-        let t1 = thread::spawn(move || process_work_dir(&d1c, Kind::Lzfse, &g1, &*c1));
-        let t2 = thread::spawn(move || process_work_dir(&d2c, Kind::Lzfse, &g2, &*c2));
+        let t1 = thread::spawn(move || process_work_dir(&d1c, Kind::Lzfse, &*c1));
+        let t2 = thread::spawn(move || process_work_dir(&d2c, Kind::Lzfse, &*c2));
         t1.join().unwrap().unwrap();
         t2.join().unwrap().unwrap();
 
@@ -587,6 +573,7 @@ mod tests {
 
     #[test]
     fn returns_error_if_any_worker_fails() {
+        std::thread::sleep(std::time::Duration::from_millis(10_000));
         let root = tempdir().unwrap();
         let target = root.path().join("target").join("debug");
         fs::create_dir_all(&target).unwrap();
