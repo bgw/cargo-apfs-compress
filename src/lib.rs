@@ -15,6 +15,9 @@ use std::sync::Arc;
 
 const CARGO_LOCK_NAME: &str = ".cargo-lock";
 
+const ROOT_SKIP_DIRS: &[&str] = &["doc", "package", "tmp"];
+const PROFILE_SKIP_DIRS: &[&str] = &[".fingerprint", "build", "deps", "examples", "incremental"];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum CompressionArg {
     Lzfse,
@@ -35,7 +38,7 @@ impl CompressionArg {
 #[derive(Debug, Parser)]
 #[command(name = "cargo-apfs-compress")]
 pub struct Cli {
-    #[arg(long = "profile", default_value = "dev")]
+    #[arg(long = "profile")]
     pub profiles: Vec<String>,
 
     #[arg(long = "target")]
@@ -149,6 +152,86 @@ pub fn resolve_work_dirs(
     out.into_iter().collect()
 }
 
+fn is_hidden(name: &str) -> bool {
+    name.starts_with('.')
+}
+
+fn looks_like_target_triple(name: &str) -> bool {
+    name.matches('-').count() >= 2
+}
+
+fn should_skip_root_dir(name: &str) -> bool {
+    is_hidden(name) || ROOT_SKIP_DIRS.contains(&name)
+}
+
+fn should_skip_profile_dir(name: &str) -> bool {
+    is_hidden(name) || PROFILE_SKIP_DIRS.contains(&name)
+}
+
+pub fn discover_default_work_dirs(target_dir: &Path, targets: &[String]) -> Result<Vec<PathBuf>> {
+    let mut out = BTreeSet::new();
+    let target_filters: BTreeSet<&str> = targets.iter().map(String::as_str).collect();
+
+    for entry in fs::read_dir(target_dir)
+        .with_context(|| format!("failed reading {}", target_dir.display()))?
+    {
+        let entry =
+            entry.with_context(|| format!("failed reading entry in {}", target_dir.display()))?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+
+        let root_name = entry.file_name().to_string_lossy().to_string();
+        if should_skip_root_dir(&root_name) {
+            continue;
+        }
+
+        if !target_filters.is_empty() {
+            if !target_filters.contains(root_name.as_str()) {
+                continue;
+            }
+            for child in fs::read_dir(entry.path())
+                .with_context(|| format!("failed reading {}", entry.path().display()))?
+            {
+                let child = child.with_context(|| {
+                    format!("failed reading entry in {}", entry.path().display())
+                })?;
+                if !child.file_type()?.is_dir() {
+                    continue;
+                }
+                let child_name = child.file_name().to_string_lossy().to_string();
+                if should_skip_profile_dir(&child_name) {
+                    continue;
+                }
+                out.insert(child.path());
+            }
+            continue;
+        }
+
+        if looks_like_target_triple(&root_name) {
+            for child in fs::read_dir(entry.path())
+                .with_context(|| format!("failed reading {}", entry.path().display()))?
+            {
+                let child = child.with_context(|| {
+                    format!("failed reading entry in {}", entry.path().display())
+                })?;
+                if !child.file_type()?.is_dir() {
+                    continue;
+                }
+                let child_name = child.file_name().to_string_lossy().to_string();
+                if should_skip_profile_dir(&child_name) {
+                    continue;
+                }
+                out.insert(child.path());
+            }
+        } else {
+            out.insert(entry.path());
+        }
+    }
+
+    Ok(out.into_iter().collect())
+}
+
 pub trait Compressor: Send + Sync {
     fn compress_paths(&self, paths: &[PathBuf], compression: Kind) -> Result<()>;
 }
@@ -223,8 +306,12 @@ pub fn run_with_compressor(cli: Cli, compressor: &dyn Compressor) -> Result<()> 
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let cargo_exe = resolve_cargo_exe();
     let target_dir = run_cargo_metadata(&cargo_exe, &cwd)?;
-    let overrides = load_profile_dir_name_overrides(&cwd)?;
-    let dirs = resolve_work_dirs(&target_dir, &cli.profiles, &cli.targets, &overrides);
+    let dirs = if cli.profiles.is_empty() {
+        discover_default_work_dirs(&target_dir, &cli.targets)?
+    } else {
+        let overrides = load_profile_dir_name_overrides(&cwd)?;
+        resolve_work_dirs(&target_dir, &cli.profiles, &cli.targets, &overrides)
+    };
 
     let gctx = Arc::new(GlobalContext::default().context("failed to initialize Cargo context")?);
     let mut had_error = false;
@@ -346,6 +433,41 @@ mod tests {
     fn defaults_to_lzfse() {
         let cli = Cli::try_parse_from(["cargo-apfs-compress"]).unwrap();
         assert_eq!(cli.compression, CompressionArg::Lzfse);
+        assert!(cli.profiles.is_empty());
+    }
+
+    #[test]
+    fn discovers_default_target_roots() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("target");
+        fs::create_dir_all(target.join("debug")).unwrap();
+        fs::create_dir_all(target.join("release")).unwrap();
+        fs::create_dir_all(target.join("x86_64-apple-darwin").join("debug")).unwrap();
+        fs::create_dir_all(target.join("x86_64-apple-darwin").join("release")).unwrap();
+        fs::create_dir_all(target.join("doc")).unwrap();
+        fs::create_dir_all(target.join("tmp")).unwrap();
+
+        let dirs = discover_default_work_dirs(&target, &[]).unwrap();
+
+        assert!(dirs.contains(&target.join("debug")));
+        assert!(dirs.contains(&target.join("release")));
+        assert!(dirs.contains(&target.join("x86_64-apple-darwin").join("debug")));
+        assert!(dirs.contains(&target.join("x86_64-apple-darwin").join("release")));
+        assert!(!dirs.contains(&target.join("doc")));
+        assert!(!dirs.contains(&target.join("tmp")));
+    }
+
+    #[test]
+    fn discovers_only_requested_targets_when_filtered() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("target");
+        fs::create_dir_all(target.join("x86_64-apple-darwin").join("debug")).unwrap();
+        fs::create_dir_all(target.join("aarch64-apple-darwin").join("debug")).unwrap();
+
+        let dirs =
+            discover_default_work_dirs(&target, &["x86_64-apple-darwin".to_owned()]).unwrap();
+
+        assert_eq!(dirs, vec![target.join("x86_64-apple-darwin").join("debug")]);
     }
 
     #[derive(Default)]

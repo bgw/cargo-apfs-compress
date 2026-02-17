@@ -20,10 +20,11 @@ Core behavior goals:
 
 ## CLI Contract
 
-- `--profile <name>` (repeatable), default is `dev` if omitted.
+- `--profile <name>` (repeatable, optional).
 - `--target <triple>` (repeatable, optional).
 - `--compression <lzfse|zlib|lzvn>`, default `lzfse`.
 - No positional target path arguments.
+- If `--profile` is omitted, discover and process all build-root subdirectories under Cargo `target/`.
 
 ## Design Decisions (Locked In)
 
@@ -54,12 +55,19 @@ Then apply `profile.<name>.dir-name` override from Cargo config when present.
 
 ### Work directory resolution
 
-For each selected profile:
+If one or more profiles are explicitly selected:
 
 - without targets: `<target_directory>/<profile_dir>`
 - with targets: `<target_directory>/<target>/<profile_dir>` for each target
 
-De-duplicate and sort directories before dispatching workers.
+If no profiles are provided:
+
+- discover build-root directories under `<target_directory>`
+- include root profile dirs (for example `debug`, `release`, custom profile dirs)
+- include target-specific profile dirs (`<target_directory>/<target>/<profile_dir>`)
+- skip obvious non-profile roots (for example `doc`, `package`, `tmp`)
+
+In all cases, de-duplicate and sort directories before dispatching workers.
 
 ### Locking model
 

@@ -43,6 +43,7 @@ fn command_returns_non_zero_on_failure() {
     fs::write(temp.path().join("target").join("debug"), b"not-a-dir").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_cargo-apfs-compress"))
+        .args(["--profile", "dev"])
         .current_dir(temp.path())
         .output()
         .unwrap();
