@@ -1,15 +1,15 @@
 # cargo-apfs-compress
 
-> Caution: this project is vibe-coded; use at your own risk.
+[![Crates.io Version](https://img.shields.io/crates/v/cargo-apfs-compress)](https://crates.io/crates/cargo-apfs-compress)
 
-A tiny CLI to compress Cargo target artifacts with APFS compression on macOS.
+> [!WARNING]
+> This project is vibe-coded. Use it at your own risk.
 
-APFS compression stores file data in a compressed form while keeping normal file access semantics, so build outputs can take much less disk space without changing your Cargo workflow.
-After builds, newly created or updated files are not automatically compressed by APFS, so you need to re-run compression periodically.
+A CLI to compress Cargo target artifacts with [APFS compression] on macOS using
+[`applesauce`].
 
-Rust `target/` directories are often large and full of binaries, rlibs, and other artifacts that are usually very compressible. This tool is aimed at reducing that footprint.
-
-Use this over running [applesauce] directly on `target/` when you want Cargo-compatible locking: this tool grabs the per-directory `.cargo-lock` first, so it won't race with active Cargo builds. By default (when `--profile` is not provided) it scans build-root subdirectories under Cargo `target/` and compresses each one recursively.
+[APFS compression]: https://en.wikipedia.org/wiki/Apple_File_System#Compression
+[`applesauce`]: https://github.com/Dr-Emann/applesauce
 
 ## Install
 
@@ -22,13 +22,55 @@ cargo install cargo-apfs-compress
 From a Cargo project directory, run:
 
 ```bash
+cargo apfs-compress --help
 cargo apfs-compress
 ```
 
-You can pass optional flags like `--profile`, `--target`, and `--compression`.
+By default, `cargo apfs-compress` will find all profiles within `target`, lock
+them, and recursively compress the contents of every file within using the
+[LZFSE] algorithm.
 
-This project is macOS-only. On Linux, consider filesystem-native compression via Btrfs: https://btrfs.readthedocs.io/en/latest/Compression.html
+> [!NOTE]
+> Newly created or updated files are not automatically compressed by APFS, so
+> you may need to re-run compression periodically after new builds.
 
-License note: this project is GPLv3+ because it depends on [applesauce], which is GPL-3.0-or-later.
+[LZFSE]: https://en.wikipedia.org/wiki/LZFSE
 
-[applesauce]: https://github.com/Dr-Emann/applesauce
+## What? Why?
+
+APFS compression stores file data in a compressed form while keeping normal file
+access semantics, so build outputs can take much less disk space without
+changing your Cargo workflow.
+
+Rust `target/` directories are often large and full of binaries, rlibs, and
+other artifacts that are usually very compressible. This tool usually compresses
+`target/` directories to less than half their normal size.
+
+## Locking and Safety
+
+To avoid corrupting the `target` directory, this first acquires the target's
+lockfile (`target/**/.cargo-lock`), and uses `applesauce`'s atomic updates using
+temporary files and renames to ensure safety.
+
+## Other Platforms
+
+This project is macOS-only.
+
+On Linux, consider a filesystem with transparent compression support, such as
+[btrfs].
+
+On Windows, [ReFS provides volume-level compression][windows-refs]. The Windows
+[Dev Drive] feature provides a convenient way to create a ReFS volume.
+
+[btrfs]: https://btrfs.readthedocs.io/en/latest/Compression.html
+[windows-refs]: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/refsutil-compression
+[Dev Drive]: https://learn.microsoft.com/en-us/windows/dev-drive/
+
+## License
+
+This project is licensed under the GPLv3+ license as it depends on
+[`applesauce`], which is GPLv3+.
+
+This project contains vendored file locking code derived from `cargo`, which is
+licensed under the MIT and Apache 2.0 licenses. The content of `src/flock.rs`
+retains the MIT and Apache 2.0 licenses, and is not GPLv3+ licensed.
