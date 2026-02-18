@@ -17,6 +17,8 @@ use std::path::{Display, Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 
+use crate::progress::ProgressBars;
+
 #[derive(Debug)]
 pub struct FileLock {
     f: Option<File>,
@@ -132,14 +134,19 @@ impl Filesystem {
         self.root.display()
     }
 
-    pub fn open_rw_exclusive_create<P>(&self, path: P, msg: &str) -> Result<FileLock>
+    pub fn open_rw_exclusive_create<P>(
+        &self,
+        path: P,
+        msg: &str,
+        progress: &ProgressBars,
+    ) -> Result<FileLock>
     where
         P: AsRef<Path>,
     {
         let mut opts = OpenOptions::new();
         opts.read(true).write(true).create(true);
         let (path, f) = self.open(path.as_ref(), &opts, true)?;
-        acquire(msg, &path, &|| f.try_lock(), &|| f.lock())?;
+        acquire(msg, &path, progress, &|| f.try_lock(), &|| f.lock())?;
         Ok(FileLock { f: Some(f), path })
     }
 
@@ -192,6 +199,7 @@ fn try_acquire(path: &Path, lock_try: &dyn Fn() -> Result<(), TryLockError>) -> 
 fn acquire(
     msg: &str,
     path: &Path,
+    progress: &ProgressBars,
     lock_try: &dyn Fn() -> Result<(), TryLockError>,
     lock_block: &dyn Fn() -> io::Result<()>,
 ) -> Result<()> {
@@ -199,7 +207,7 @@ fn acquire(
         return Ok(());
     }
 
-    eprintln!("Blocking waiting for file lock on {msg}");
+    progress.println_normal(|| format!("Blocking waiting for file lock on {msg}"));
     lock_block().with_context(|| format!("failed to lock file: {}", path.display()))?;
     Ok(())
 }

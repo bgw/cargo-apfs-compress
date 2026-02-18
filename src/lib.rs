@@ -1,7 +1,7 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
+use applesauce::FileCompressor;
 use applesauce::compressor::Kind;
 use applesauce::progress::Progress as _;
-use applesauce::FileCompressor;
 use clap::{ArgAction, Parser, ValueEnum};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
@@ -299,7 +299,7 @@ pub fn process_work_dir(
 
     let fs = Filesystem::new(dir.to_path_buf());
     let _lock = fs
-        .open_rw_exclusive_create(CARGO_LOCK_NAME, "build directory")
+        .open_rw_exclusive_create(CARGO_LOCK_NAME, "build directory", progress)
         .with_context(|| format!("failed to lock {}", dir.display()))?;
 
     let mut inputs = Vec::new();
