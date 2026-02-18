@@ -2,9 +2,6 @@
 
 [![Crates.io Version](https://img.shields.io/crates/v/cargo-apfs-compress)](https://crates.io/crates/cargo-apfs-compress)
 
-> [!WARNING]
-> This project is vibe-coded. Use it at your own risk.
-
 A CLI to compress Cargo target artifacts with [APFS compression] on macOS using
 [`applesauce`].
 
@@ -14,6 +11,9 @@ A CLI to compress Cargo target artifacts with [APFS compression] on macOS using
 [`applesauce`]: https://github.com/Dr-Emann/applesauce
 
 ## Install
+
+> [!WARNING]
+> This project is vibe-coded. Use it at your own risk.
 
 ```bash
 cargo install cargo-apfs-compress
