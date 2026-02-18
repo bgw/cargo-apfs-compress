@@ -28,7 +28,7 @@ cargo apfs-compress
 
 By default, `cargo apfs-compress` will find all profiles within `target`, lock
 them, and recursively compress the contents of every file within using the
-[LZFSE] algorithm.
+[LZFSE] algorithm. Files that are already compressed are skipped.
 
 > [!NOTE]
 > Newly created or updated files are not automatically compressed by APFS, so
