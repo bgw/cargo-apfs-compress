@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use applesauce::FileCompressor;
 use applesauce::compressor::Kind;
+use applesauce::progress::Progress as _;
 use clap::{ArgAction, Parser, ValueEnum};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
@@ -261,7 +262,7 @@ pub trait Compressor: Send + Sync {
         &self,
         paths: &[PathBuf],
         compression: Kind,
-        verbosity: Verbosity,
+        progress: &ProgressBars,
     ) -> Result<()>;
 }
 
@@ -273,13 +274,11 @@ impl Compressor for ApplesauceCompressor {
         &self,
         paths: &[PathBuf],
         compression: Kind,
-        verbosity: Verbosity,
+        progress: &ProgressBars,
     ) -> Result<()> {
         let mut compressor = FileCompressor::new();
         let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-        let progress = ProgressBars::new(verbosity);
         compressor.recursive_compress(refs, compression, 1.0, 2, &progress, false);
-        progress.finish();
         Ok(())
     }
 }
@@ -287,11 +286,11 @@ impl Compressor for ApplesauceCompressor {
 pub fn process_work_dir(
     dir: &Path,
     compression: Kind,
-    verbosity: Verbosity,
+    progress: &ProgressBars,
     compressor: &dyn Compressor,
 ) -> Result<()> {
     if !dir.exists() {
-        println!("skip {} (missing)", dir.display());
+        progress.println_normal(|| format!("skip {} (missing)", dir.display()));
         return Ok(());
     }
     if !dir.is_dir() {
@@ -307,14 +306,15 @@ pub fn process_work_dir(
     for entry in fs::read_dir(dir).with_context(|| format!("failed reading {}", dir.display()))? {
         let entry = entry.with_context(|| format!("failed reading entry in {}", dir.display()))?;
         if entry.file_name() == OsStr::new(CARGO_LOCK_NAME) {
-            println!("exclude {} from {}", CARGO_LOCK_NAME, dir.display());
+            progress
+                .println_verbose(|| format!("exclude {} from {}", CARGO_LOCK_NAME, dir.display()));
             continue;
         }
         inputs.push(entry.path());
     }
 
     compressor
-        .compress_paths(&inputs, compression, verbosity)
+        .compress_paths(&inputs, compression, progress)
         .with_context(|| format!("compression failed for {}", dir.display()))
 }
 
@@ -340,21 +340,23 @@ pub fn run_with_compressor(cli: Cli, compressor: &dyn Compressor) -> Result<()> 
         let mut handles = Vec::new();
         for dir in dirs {
             handles.push(scope.spawn(move || {
+                let progress = ProgressBars::new(verbosity);
                 let result =
-                    process_work_dir(&dir, cli.compression.to_kind(), verbosity, compressor);
-                (dir, result)
+                    process_work_dir(&dir, cli.compression.to_kind(), &progress, compressor);
+                (dir, result, progress)
             }));
         }
 
         for handle in handles {
-            let (dir, result) = handle.join().expect("worker thread panicked");
+            let (dir, result, progress) = handle.join().expect("worker thread panicked");
             match result {
-                Ok(()) => println!("ok {}", dir.display()),
+                Ok(()) => progress.println_normal(|| format!("ok {}", dir.display())),
                 Err(error) => {
                     had_error = true;
-                    eprintln!("error {}: {error:#}", dir.display());
+                    progress.error(&dir, &format!("{error:#}"));
                 }
             }
+            progress.finish();
         }
     });
 
@@ -522,7 +524,7 @@ mod tests {
             &self,
             paths: &[PathBuf],
             _compression: Kind,
-            _verbosity: Verbosity,
+            _progress: &ProgressBars,
         ) -> Result<()> {
             self.starts.lock().unwrap().push(Instant::now());
             self.calls.lock().unwrap().push(paths.to_vec());
@@ -550,7 +552,8 @@ mod tests {
         fs::write(temp.path().join(CARGO_LOCK_NAME), b"").unwrap();
 
         let compressor = RecordingCompressor::default();
-        process_work_dir(temp.path(), Kind::Lzfse, Verbosity::Normal, &compressor).unwrap();
+        let progress = ProgressBars::new(Verbosity::Normal);
+        process_work_dir(temp.path(), Kind::Lzfse, &progress, &compressor).unwrap();
 
         let calls = compressor.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
@@ -572,9 +575,15 @@ mod tests {
         let d2 = temp.path().to_path_buf();
         let c1 = Arc::clone(&compressor);
         let c2 = Arc::clone(&compressor);
-        let t1 = thread::spawn(move || process_work_dir(&d1, Kind::Lzfse, Verbosity::Normal, &*c1));
+        let t1 = thread::spawn(move || {
+            let progress = ProgressBars::new(Verbosity::Normal);
+            process_work_dir(&d1, Kind::Lzfse, &progress, &*c1)
+        });
         thread::sleep(Duration::from_millis(20));
-        let t2 = thread::spawn(move || process_work_dir(&d2, Kind::Lzfse, Verbosity::Normal, &*c2));
+        let t2 = thread::spawn(move || {
+            let progress = ProgressBars::new(Verbosity::Normal);
+            process_work_dir(&d2, Kind::Lzfse, &progress, &*c2)
+        });
         t1.join().unwrap().unwrap();
         t2.join().unwrap().unwrap();
 
@@ -605,10 +614,14 @@ mod tests {
         let d1c = d1.clone();
         let d2c = d2.clone();
 
-        let t1 =
-            thread::spawn(move || process_work_dir(&d1c, Kind::Lzfse, Verbosity::Normal, &*c1));
-        let t2 =
-            thread::spawn(move || process_work_dir(&d2c, Kind::Lzfse, Verbosity::Normal, &*c2));
+        let t1 = thread::spawn(move || {
+            let progress = ProgressBars::new(Verbosity::Normal);
+            process_work_dir(&d1c, Kind::Lzfse, &progress, &*c1)
+        });
+        let t2 = thread::spawn(move || {
+            let progress = ProgressBars::new(Verbosity::Normal);
+            process_work_dir(&d2c, Kind::Lzfse, &progress, &*c2)
+        });
         t1.join().unwrap().unwrap();
         t2.join().unwrap().unwrap();
 

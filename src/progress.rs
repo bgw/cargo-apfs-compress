@@ -55,9 +55,43 @@ pub struct ProgressBars {
 }
 
 impl ProgressBars {
+    fn print_stdout_line(&self, message: String) {
+        if self.total_bar.is_hidden() {
+            println!("{message}");
+        } else {
+            self.total_bar.println(message);
+        }
+    }
+
+    fn print_stderr_line(&self, message: String) {
+        if self.total_bar.is_hidden() {
+            eprintln!("{message}");
+        } else {
+            self.total_bar.println(message);
+        }
+    }
+
     pub fn finish(&self) {
         let _ = self.bars.clear();
         self.total_bar.finish();
+    }
+
+    pub fn println_normal<F>(&self, message: F)
+    where
+        F: FnOnce() -> String,
+    {
+        if self.verbosity >= Verbosity::Normal {
+            self.print_stdout_line(message());
+        }
+    }
+
+    pub fn println_verbose<F>(&self, message: F)
+    where
+        F: FnOnce() -> String,
+    {
+        if self.verbosity >= Verbosity::Verbose {
+            self.print_stdout_line(message());
+        }
     }
 }
 
@@ -164,8 +198,7 @@ impl Progress for ProgressBars {
     type Task = ProgressWithTotal;
 
     fn error(&self, path: &Path, message: &str) {
-        self.total_bar
-            .println(format!("{}: error: {message}", path.display()))
+        self.print_stderr_line(format!("{}: error: {message}", path.display()))
     }
 
     fn file_skipped(&self, path: &Path, why: SkipReason) {
@@ -183,8 +216,7 @@ impl Progress for ProgressBars {
             | SkipReason::FsNotSupported => Verbosity::Normal,
         };
         if self.verbosity >= required_verbosity {
-            self.total_bar
-                .println(format!("{}: Skipped: {why}", path.display()))
+            self.print_stdout_line(format!("{}: Skipped: {why}", path.display()))
         }
     }
 
