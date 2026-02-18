@@ -1,8 +1,7 @@
-use anyhow::{anyhow, Context, Result};
-use applesauce::compressor::Kind;
-use applesauce::progress::{Progress, Task};
+use anyhow::{Context, Result, anyhow};
 use applesauce::FileCompressor;
-use clap::{Parser, ValueEnum};
+use applesauce::compressor::Kind;
+use clap::{ArgAction, Parser, ValueEnum};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsStr;
@@ -11,8 +10,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod flock;
+mod progress;
 
 use crate::flock::Filesystem;
+use crate::progress::{ProgressBars, Verbosity};
 
 const CARGO_LOCK_NAME: &str = ".cargo-lock";
 
@@ -39,14 +40,36 @@ impl CompressionArg {
 #[derive(Debug, Parser)]
 #[command(name = "cargo-apfs-compress")]
 pub struct Cli {
+    /// Finds and compresses all profiles by default. Use this to restrict which profiles are
+    /// compressed.
     #[arg(long = "profile")]
     pub profiles: Vec<String>,
 
+    /// Finds all platform targets by default. Use this to restrict which target platforms are
+    /// compressed.
     #[arg(long = "target")]
     pub targets: Vec<String>,
 
     #[arg(long = "compression", value_enum, default_value = "lzfse")]
     pub compression: CompressionArg,
+
+    #[arg(short = 'v', long = "verbose", action = ArgAction::Count, conflicts_with = "quiet")]
+    pub verbose: u8,
+
+    #[arg(short = 'q', long = "quiet", action = ArgAction::Count, conflicts_with = "verbose")]
+    pub quiet: u8,
+}
+
+impl Cli {
+    fn verbosity(&self) -> Verbosity {
+        if self.quiet > 0 {
+            Verbosity::Quiet
+        } else if self.verbose > 0 {
+            Verbosity::Verbose
+        } else {
+            Verbosity::Normal
+        }
+    }
 }
 
 pub fn resolve_cargo_exe() -> String {
@@ -234,38 +257,39 @@ pub fn discover_default_work_dirs(target_dir: &Path, targets: &[String]) -> Resu
 }
 
 pub trait Compressor: Send + Sync {
-    fn compress_paths(&self, paths: &[PathBuf], compression: Kind) -> Result<()>;
-}
-
-struct NoProgressTask;
-impl Task for NoProgressTask {
-    fn increment(&self, _amt: u64) {}
-    fn error(&self, _message: &str) {}
-}
-
-struct NoProgress;
-impl Progress for NoProgress {
-    type Task = NoProgressTask;
-
-    fn error(&self, _path: &Path, _message: &str) {}
-    fn file_task(&self, _path: &Path, _size: u64) -> Self::Task {
-        NoProgressTask
-    }
+    fn compress_paths(
+        &self,
+        paths: &[PathBuf],
+        compression: Kind,
+        verbosity: Verbosity,
+    ) -> Result<()>;
 }
 
 #[derive(Default)]
 pub struct ApplesauceCompressor;
 
 impl Compressor for ApplesauceCompressor {
-    fn compress_paths(&self, paths: &[PathBuf], compression: Kind) -> Result<()> {
+    fn compress_paths(
+        &self,
+        paths: &[PathBuf],
+        compression: Kind,
+        verbosity: Verbosity,
+    ) -> Result<()> {
         let mut compressor = FileCompressor::new();
         let refs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-        compressor.recursive_compress(refs, compression, 1.0, 2, &NoProgress, false);
+        let progress = ProgressBars::new(verbosity);
+        compressor.recursive_compress(refs, compression, 1.0, 2, &progress, false);
+        progress.finish();
         Ok(())
     }
 }
 
-pub fn process_work_dir(dir: &Path, compression: Kind, compressor: &dyn Compressor) -> Result<()> {
+pub fn process_work_dir(
+    dir: &Path,
+    compression: Kind,
+    verbosity: Verbosity,
+    compressor: &dyn Compressor,
+) -> Result<()> {
     if !dir.exists() {
         println!("skip {} (missing)", dir.display());
         return Ok(());
@@ -290,7 +314,7 @@ pub fn process_work_dir(dir: &Path, compression: Kind, compressor: &dyn Compress
     }
 
     compressor
-        .compress_paths(&inputs, compression)
+        .compress_paths(&inputs, compression, verbosity)
         .with_context(|| format!("compression failed for {}", dir.display()))
 }
 
@@ -299,6 +323,7 @@ pub fn run(cli: Cli) -> Result<()> {
 }
 
 pub fn run_with_compressor(cli: Cli, compressor: &dyn Compressor) -> Result<()> {
+    let verbosity = cli.verbosity();
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let cargo_exe = resolve_cargo_exe();
     let target_dir = run_cargo_metadata(&cargo_exe, &cwd)?;
@@ -315,7 +340,8 @@ pub fn run_with_compressor(cli: Cli, compressor: &dyn Compressor) -> Result<()> 
         let mut handles = Vec::new();
         for dir in dirs {
             handles.push(scope.spawn(move || {
-                let result = process_work_dir(&dir, cli.compression.to_kind(), compressor);
+                let result =
+                    process_work_dir(&dir, cli.compression.to_kind(), verbosity, compressor);
                 (dir, result)
             }));
         }
@@ -428,6 +454,24 @@ mod tests {
         let cli = Cli::try_parse_from(["cargo-apfs-compress"]).unwrap();
         assert_eq!(cli.compression, CompressionArg::Lzfse);
         assert!(cli.profiles.is_empty());
+        assert_eq!(cli.verbose, 0);
+        assert_eq!(cli.quiet, 0);
+    }
+
+    #[test]
+    fn parses_verbose_flag() {
+        let cli = Cli::try_parse_from(["cargo-apfs-compress", "-v"]).unwrap();
+        assert_eq!(cli.verbose, 1);
+        assert_eq!(cli.quiet, 0);
+        assert_eq!(cli.verbosity(), Verbosity::Verbose);
+    }
+
+    #[test]
+    fn parses_quiet_flag() {
+        let cli = Cli::try_parse_from(["cargo-apfs-compress", "-q"]).unwrap();
+        assert_eq!(cli.quiet, 1);
+        assert_eq!(cli.verbose, 0);
+        assert_eq!(cli.verbosity(), Verbosity::Quiet);
     }
 
     #[test]
@@ -474,7 +518,12 @@ mod tests {
     }
 
     impl Compressor for RecordingCompressor {
-        fn compress_paths(&self, paths: &[PathBuf], _compression: Kind) -> Result<()> {
+        fn compress_paths(
+            &self,
+            paths: &[PathBuf],
+            _compression: Kind,
+            _verbosity: Verbosity,
+        ) -> Result<()> {
             self.starts.lock().unwrap().push(Instant::now());
             self.calls.lock().unwrap().push(paths.to_vec());
             if self.delay > Duration::ZERO {
@@ -501,7 +550,7 @@ mod tests {
         fs::write(temp.path().join(CARGO_LOCK_NAME), b"").unwrap();
 
         let compressor = RecordingCompressor::default();
-        process_work_dir(temp.path(), Kind::Lzfse, &compressor).unwrap();
+        process_work_dir(temp.path(), Kind::Lzfse, Verbosity::Normal, &compressor).unwrap();
 
         let calls = compressor.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
@@ -523,9 +572,9 @@ mod tests {
         let d2 = temp.path().to_path_buf();
         let c1 = Arc::clone(&compressor);
         let c2 = Arc::clone(&compressor);
-        let t1 = thread::spawn(move || process_work_dir(&d1, Kind::Lzfse, &*c1));
+        let t1 = thread::spawn(move || process_work_dir(&d1, Kind::Lzfse, Verbosity::Normal, &*c1));
         thread::sleep(Duration::from_millis(20));
-        let t2 = thread::spawn(move || process_work_dir(&d2, Kind::Lzfse, &*c2));
+        let t2 = thread::spawn(move || process_work_dir(&d2, Kind::Lzfse, Verbosity::Normal, &*c2));
         t1.join().unwrap().unwrap();
         t2.join().unwrap().unwrap();
 
@@ -556,8 +605,10 @@ mod tests {
         let d1c = d1.clone();
         let d2c = d2.clone();
 
-        let t1 = thread::spawn(move || process_work_dir(&d1c, Kind::Lzfse, &*c1));
-        let t2 = thread::spawn(move || process_work_dir(&d2c, Kind::Lzfse, &*c2));
+        let t1 =
+            thread::spawn(move || process_work_dir(&d1c, Kind::Lzfse, Verbosity::Normal, &*c1));
+        let t2 =
+            thread::spawn(move || process_work_dir(&d2c, Kind::Lzfse, Verbosity::Normal, &*c2));
         t1.join().unwrap().unwrap();
         t2.join().unwrap().unwrap();
 
@@ -586,6 +637,8 @@ mod tests {
             profiles: vec!["dev".to_owned()],
             targets: vec![],
             compression: CompressionArg::Lzfse,
+            verbose: 0,
+            quiet: 0,
         };
 
         let compressor = RecordingCompressor {
