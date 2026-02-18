@@ -8,6 +8,8 @@
 A CLI to compress Cargo target artifacts with [APFS compression] on macOS using
 [`applesauce`].
 
+![Screenshot of cargo-apfs-compress with progress bar](screenshot.png)
+
 [APFS compression]: https://en.wikipedia.org/wiki/Apple_File_System#Compression
 [`applesauce`]: https://github.com/Dr-Emann/applesauce
 
