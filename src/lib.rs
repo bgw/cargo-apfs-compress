@@ -324,6 +324,7 @@ pub fn run(cli: Cli) -> Result<()> {
 
 pub fn run_with_compressor(cli: Cli, compressor: &dyn Compressor) -> Result<()> {
     let verbosity = cli.verbosity();
+    let progress = ProgressBars::new(verbosity);
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let cargo_exe = resolve_cargo_exe();
     let target_dir = run_cargo_metadata(&cargo_exe, &cwd)?;
@@ -338,27 +339,27 @@ pub fn run_with_compressor(cli: Cli, compressor: &dyn Compressor) -> Result<()> 
 
     std::thread::scope(|scope| {
         let mut handles = Vec::new();
+        let progress_ref = &progress;
         for dir in dirs {
             handles.push(scope.spawn(move || {
-                let progress = ProgressBars::new(verbosity);
                 let result =
-                    process_work_dir(&dir, cli.compression.to_kind(), &progress, compressor);
-                (dir, result, progress)
+                    process_work_dir(&dir, cli.compression.to_kind(), progress_ref, compressor);
+                (dir, result)
             }));
         }
 
         for handle in handles {
-            let (dir, result, progress) = handle.join().expect("worker thread panicked");
+            let (dir, result) = handle.join().expect("worker thread panicked");
             match result {
-                Ok(()) => progress.println_normal(|| format!("ok {}", dir.display())),
+                Ok(()) => progress.println_normal(|| format!("Compressed {}", dir.display())),
                 Err(error) => {
                     had_error = true;
                     progress.error(&dir, &format!("{error:#}"));
                 }
             }
-            progress.finish();
         }
     });
+    progress.finish();
 
     if had_error {
         Err(anyhow!("one or more directories failed"))

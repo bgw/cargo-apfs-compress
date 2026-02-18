@@ -14,7 +14,7 @@ fn write_workspace(dir: &std::path::Path) {
 }
 
 #[test]
-fn command_succeeds_and_prints_ok() {
+fn command_succeeds_and_prints_compressed() {
     let temp = tempdir().unwrap();
     write_workspace(temp.path());
 
@@ -30,7 +30,7 @@ fn command_succeeds_and_prints_ok() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("ok"));
+    assert!(stdout.contains("Compressed"));
     assert!(!stdout.contains("exclude .cargo-lock"));
 }
 
