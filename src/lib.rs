@@ -1,7 +1,7 @@
-use anyhow::{Context, Result, anyhow};
-use applesauce::FileCompressor;
+use anyhow::{anyhow, Context, Result};
 use applesauce::compressor::Kind;
 use applesauce::progress::Progress as _;
+use applesauce::FileCompressor;
 use clap::{ArgAction, Parser, ValueEnum};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
@@ -18,7 +18,7 @@ use crate::progress::{ProgressBars, Verbosity};
 
 const CARGO_LOCK_NAME: &str = ".cargo-lock";
 
-const ROOT_SKIP_DIRS: &[&str] = &["doc", "package", "tmp"];
+const ROOT_SKIP_DIRS: &[&str] = &["tmp"];
 const PROFILE_SKIP_DIRS: &[&str] = &[".fingerprint", "build", "deps", "examples", "incremental"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -485,6 +485,7 @@ mod tests {
         fs::create_dir_all(target.join("x86_64-apple-darwin").join("debug")).unwrap();
         fs::create_dir_all(target.join("x86_64-apple-darwin").join("release")).unwrap();
         fs::create_dir_all(target.join("doc")).unwrap();
+        fs::create_dir_all(target.join("package")).unwrap();
         fs::create_dir_all(target.join("tmp")).unwrap();
 
         let dirs = discover_default_work_dirs(&target, &[]).unwrap();
@@ -493,7 +494,8 @@ mod tests {
         assert!(dirs.contains(&target.join("release")));
         assert!(dirs.contains(&target.join("x86_64-apple-darwin").join("debug")));
         assert!(dirs.contains(&target.join("x86_64-apple-darwin").join("release")));
-        assert!(!dirs.contains(&target.join("doc")));
+        assert!(dirs.contains(&target.join("doc")));
+        assert!(dirs.contains(&target.join("package")));
         assert!(!dirs.contains(&target.join("tmp")));
     }
 
