@@ -23,6 +23,9 @@ Core behavior goals:
 - `--profile <name>` (repeatable, optional).
 - `--target <triple>` (repeatable, optional).
 - `--compression <lzfse|zlib|lzvn>`, default `lzfse`.
+- `-v, --verbose` to enable verbose progress/log messages.
+- `-q, --quiet` to suppress normal progress/log messages.
+- `--verbose` and `--quiet` are mutually exclusive.
 - No positional target path arguments.
 - If `--profile` is omitted, discover and process all build-root subdirectories under Cargo `target/`.
 - Support Cargo subcommand execution (`cargo apfs-compress ...`) and direct binary execution.
@@ -66,7 +69,7 @@ If no profiles are provided:
 - discover build-root directories under `<target_directory>`
 - include root profile dirs (for example `debug`, `release`, custom profile dirs)
 - include target-specific profile dirs (`<target_directory>/<target>/<profile_dir>`)
-- skip obvious non-profile roots (for example `doc`, `package`, `tmp`)
+- skip obvious non-profile roots (currently `tmp`)
 
 In all cases, de-duplicate and sort directories before dispatching workers.
 
@@ -84,7 +87,7 @@ For each resolved directory:
 
 - Unit of parallelism: one worker per resolved directory.
 - Process all directories even if some fail.
-- Print per-directory result.
+- Print per-directory result via progress logging (`println_normal`/`println_verbose`) and route lock-wait/error reporting through the same progress output path.
 - Exit code is `0` only if all directories succeed.
 
 ## Architecture Notes
